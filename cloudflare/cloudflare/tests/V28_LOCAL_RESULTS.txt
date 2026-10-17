@@ -1,0 +1,1 @@
+41 passed, 1 deprecation warning. Local CPython 3.12 / cryptography 50.0.0. Cloudflare runtime not tested. See V28_PASSWORD_FIX.md.
