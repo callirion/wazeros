@@ -42,9 +42,20 @@ async def known(r,e):return JSONResponse({'error':{'code':str(e.status_code),'me
 @app.exception_handler(RequestValidationError)
 async def invalid(r,e):return JSONResponse({'error':{'code':'validation_error','message':'Invalid request fields'}},status_code=422)
 @app.exception_handler(Exception)
-async def unknown(r,e):
-    logging.getLogger('wazeros.m1').error('Unhandled error type=%s path=%s',type(e).__name__,r.url.path)
-    return JSONResponse({'error':{'code':'internal_error','message':'Unable to complete request'}},status_code=500)
+async def unknown(r, e):
+    frames = " -> ".join(
+        f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}:{frame.name}"
+        for frame in traceback.extract_tb(e.__traceback__)
+    )
+    logging.getLogger("wazeros.m1").error(
+        "Unhandled error type=%s attribute=%s path=%s frames=%s",
+        type(e).__name__, getattr(e, "name", None), r.url.path, frames,
+    )
+    return JSONResponse(
+        {"error": {"code": "internal_error", "message": "Unable to complete request"}},
+        status_code=500,
+    )
+
 async def throttle(store,key):
     row=await store.first('INSERT INTO rate_limits VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<=? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<=? THEN excluded.reset_at ELSE reset_at END RETURNING count',digest(key),now()+900,now(),now())
     if row['count']>10:raise HTTPException(429,'Too many attempts. Try again later.')
