@@ -1,0 +1,7 @@
+[project]
+name = "wazeros-cloudflare-m1"
+version = "28.0.0"
+requires-python = ">=3.13"
+dependencies = ["fastapi", "httpx", "cryptography"]
+[dependency-groups]
+dev = ["workers-py", "workers-runtime-sdk", "pytest"]

@@ -1,79 +1,62 @@
-"""PBKDF2-SHA256 with async Web Crypto support for Python Workers.
+"""PBKDF2-SHA256 using the cryptography package, not Web Crypto.
 
-Synchronous helpers are for CPython provisioning/tests only. API handlers use
-async helpers. Runtime failures are propagated; work factor is never lowered.
+Preserves the existing pbkdf2_sha256$600000$salt$hash storage format.
+Both synchronous provisioning helpers and asynchronous API helpers are retained.
+Cryptographic/backend failures propagate; authentication never fails open.
 """
-import hashlib
 import hmac
 import secrets
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
 ITERATIONS = 600_000
+SALT_BYTES = 16
+KEY_BYTES = 32
+
+
+def _derive(password, salt):
+    return PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=KEY_BYTES,
+        salt=salt,
+        iterations=ITERATIONS,
+    ).derive(password.encode("utf-8"))
 
 
 def _parse(encoded):
+    if not isinstance(encoded, str):
+        raise ValueError("Invalid password hash")
     algorithm, count, salt_hex, expected_hex = encoded.split("$")
     if algorithm != "pbkdf2_sha256" or count != str(ITERATIONS):
         raise ValueError("Unsupported password format")
+    if len(salt_hex) != SALT_BYTES * 2 or len(expected_hex) != KEY_BYTES * 2:
+        raise ValueError("Invalid password hash length")
     salt = bytes.fromhex(salt_hex)
     expected = bytes.fromhex(expected_hex)
-    if len(salt) != 16 or len(expected) != 32:
+    if len(salt) != SALT_BYTES or len(expected) != KEY_BYTES:
         raise ValueError("Invalid password hash length")
     return salt, expected
 
 
-def _native(password, salt):
-    derive = getattr(hashlib, "pbkdf2_hmac", None)
-    if not callable(derive):
-        raise RuntimeError("Use async password helpers in Python Workers")
-    return derive("sha256", password.encode("utf-8"), salt, ITERATIONS, dklen=32)
-
-
 def encode(password):
-    salt = secrets.token_bytes(16)
-    key = _native(password, salt)
+    salt = secrets.token_bytes(SALT_BYTES)
+    key = _derive(password, salt)
     return f"pbkdf2_sha256${ITERATIONS}${salt.hex()}${key.hex()}"
 
 
 def verify(encoded, password):
     try:
         salt, expected = _parse(encoded)
-    except (ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError):
         return False
-    return hmac.compare_digest(_native(password, salt), expected)
-
-
-async def _derive(password, salt):
-    # Keep CPython tests/provisioning compatible; no pure-Python crypto fallback.
-    if callable(getattr(hashlib, "pbkdf2_hmac", None)):
-        return _native(password, salt)
-
-    from js import Object, Uint8Array, crypto
-    from pyodide.ffi import to_js
-
-    material = Uint8Array.new(to_js(list(password.encode("utf-8"))))
-    salt_buffer = Uint8Array.new(to_js(list(salt)))
-    key = await crypto.subtle.importKey(
-        "raw", material, "PBKDF2", False, to_js(["deriveBits"])
-    )
-    params = to_js(
-        {"name": "PBKDF2", "salt": salt_buffer,
-         "iterations": ITERATIONS, "hash": "SHA-256"},
-        dict_converter=Object.fromEntries,
-    )
-    result = await crypto.subtle.deriveBits(params, key, 256)
-    return bytes(Uint8Array.new(result).to_py())
+    key = _derive(password, salt)
+    return hmac.compare_digest(key, expected)
 
 
 async def encode_async(password):
-    salt = secrets.token_bytes(16)
-    key = await _derive(password, salt)
-    return f"pbkdf2_sha256${ITERATIONS}${salt.hex()}${key.hex()}"
+    return encode(password)
 
 
 async def verify_async(encoded, password):
-    try:
-        salt, expected = _parse(encoded)
-    except (ValueError, TypeError, AttributeError):
-        return False
-    key = await _derive(password, salt)
-    return hmac.compare_digest(key, expected)
+    return verify(encoded, password)
