@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel,Field
 from .store import Store
-from .passwords import encode,verify
+from .passwords import encode_async,verify_async
 from .schemas import Signup,Credentials,WorkspaceInput,TokenRequest,EmailRequest,ResetRequest
 from .reporting import parse_csv,summarize,safe_cell,FIELDS
 app=FastAPI(title='Wazeros Cloudflare M1',version='25.0.0')
@@ -96,7 +96,7 @@ async def signup(body:Signup,request:Request,response:Response):
     if await s.first('SELECT id FROM users WHERE email=?',body.email):raise HTTPException(409,'Email already registered')
     u={'id':uid(),'email':body.email,'verified':0,'locale':'en'};token=secrets.token_urlsafe(32);session=secrets.token_urlsafe(32)
     try:
-        await s.batch([('INSERT INTO users(id,email,password_hash) VALUES (?,?,?)',(u['id'],body.email,encode(body.password))),('INSERT INTO legal_acceptances VALUES (?,?,?)',(u['id'],body.document_version,stamp())),('INSERT INTO action_tokens VALUES (?,?,?,?)',(digest(token),u['id'],'verify',now()+3600)),('INSERT INTO sessions VALUES (?,?,?)',(digest(session),u['id'],now()+604800)),audit(u['id'],'account.created')])
+        await s.batch([('INSERT INTO users(id,email,password_hash) VALUES (?,?,?)',(u['id'],body.email,await encode_async(body.password))),('INSERT INTO legal_acceptances VALUES (?,?,?)',(u['id'],body.document_version,stamp())),('INSERT INTO action_tokens VALUES (?,?,?,?)',(digest(token),u['id'],'verify',now()+3600)),('INSERT INTO sessions VALUES (?,?,?)',(digest(session),u['id'],now()+604800)),audit(u['id'],'account.created')])
     except Exception as e:
         if 'UNIQUE' in str(e).upper():raise HTTPException(409,'Email already registered')
         raise
@@ -108,7 +108,7 @@ async def login(body:Credentials,request:Request,response:Response):
     await throttle(s,'login-ip:'+r.headers.get('cf-connecting-ip',r.client.host if r.client else 'unknown'))
     u=await s.first('SELECT * FROM users WHERE email=?',body.email)
     encoded=u['password_hash'] if u else 'pbkdf2_sha256$600000$'+'00'*16+'$'+'00'*32
-    if not verify(encoded,body.password) or not u:raise HTTPException(401,'Invalid email or password')
+    if not await verify_async(encoded,body.password) or not u:raise HTTPException(401,'Invalid email or password')
     token=secrets.token_urlsafe(32)
     await s.batch([('INSERT INTO sessions VALUES (?,?,?)',(digest(token),u['id'],now()+604800)),audit(u['id'],'session.created')])
     cookie(r,response,token);return user_data(u)
@@ -133,7 +133,7 @@ async def consume(request,token,purpose,password=None):
     items=[('INSERT INTO token_uses(token_hash,used_at) VALUES ((SELECT token_hash FROM action_tokens WHERE token_hash=? AND purpose=? AND expires_at>?),?)',(hashed,purpose,now(),now()))]
     if password is None:items.append(('UPDATE users SET verified=1 WHERE id=?',(row['user_id'],)))
     else:
-        items.extend([('UPDATE users SET password_hash=? WHERE id=?',(encode(password),row['user_id'])),('DELETE FROM sessions WHERE user_id=?',(row['user_id'],))])
+        items.extend([('UPDATE users SET password_hash=? WHERE id=?',(await encode_async(password),row['user_id'])),('DELETE FROM sessions WHERE user_id=?',(row['user_id'],))])
     items.extend([('DELETE FROM action_tokens WHERE token_hash=?',(hashed,)),audit(row['user_id'],'email.verified' if password is None else 'password.reset')])
     try:await store.batch(items)
     except Exception as e:
