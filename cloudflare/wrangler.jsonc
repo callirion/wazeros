@@ -12,7 +12,7 @@
   },
   "vars": {
     "APP_ENV": "staging",
-    "FRONTEND_URL": "http://localhost:3000",
+    "FRONTEND_URL": "https://wazeros.taceyt8.workers.dev",
     "LEGAL_VERSION": "draft-v043-purchase-2026-10-09",
     "MAIL_FROM": "",
     "REGISTRATION_ENABLED": "false"
