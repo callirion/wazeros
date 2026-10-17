@@ -21,7 +21,7 @@
     {
       "binding": "DB",
       "database_name": "wazeros-m1-staging",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "eb692719-3d82-4ee9-a518-7a3773705219",
       "migrations_dir": "migrations"
     }
   ]
