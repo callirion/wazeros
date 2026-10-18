@@ -1,1 +1,0 @@
-INSERT INTO users(id,email,password_hash,verified,locale) VALUES (lower(hex(randomblob(16))), 'REPLACE_WITH_YOUR_OWN_EMAIL', '!email-link-only', 0, 'en') ON CONFLICT(email) DO NOTHING;
