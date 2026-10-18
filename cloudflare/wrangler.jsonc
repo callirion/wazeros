@@ -16,6 +16,7 @@
     "LEGAL_VERSION": "draft-v043-purchase-2026-10-09",
     "MAIL_FROM": "",
     "REGISTRATION_ENABLED": "false"
+    "AUTH_PUBLIC_ORIGIN": "https://wazeros.taceyt8.workers.dev",
   },
   "d1_databases": [
     {
