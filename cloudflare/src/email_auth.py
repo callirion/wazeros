@@ -65,7 +65,10 @@ async def provider_send(payload, headers):
     )
     status = result.status
     await result.text()
-    if not 200 <= status < 300:
+        if not 200 <= status < 300:
+        logging.getLogger("wazeros.auth").error(
+            "email_provider_rejected status=%s", status
+        )
         raise RuntimeError("Email provider rejected request")
 
 async def send_link(request, email, token):
