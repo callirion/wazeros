@@ -8,7 +8,7 @@ from pydantic import BaseModel,Field
 from .store import Store
 from .schemas import Signup,Credentials,WorkspaceInput,TokenRequest,EmailRequest,ResetRequest
 from .reporting import parse_csv,summarize,safe_cell,FIELDS
-app=FastAPI(title='Wazeros Cloudflare M1',version='29.0.0')
+app=FastAPI(title='Wazeros Cloudflare M1',version='30.0.0')
 def now():return int(time.time())
 def stamp():return datetime.now(timezone.utc).isoformat()
 def uid():return str(uuid.uuid4())
@@ -72,7 +72,7 @@ async def access(r,org,write=False,product=False):
 def mail_ready(r):return bool(setting(r,'MAIL_API_KEY') and setting(r,'MAIL_FROM'))
 @app.get('/health')
 async def health(request:Request):
-    await db(request).first('SELECT 1 AS ok');return {'status':'ok','phase':'M1','storage':'D1','version':'29.0.0','auth':'email_link'}
+    await db(request).first('SELECT 1 AS ok');return {'status':'ok','phase':'M1','storage':'D1','version':'30.0.0','auth':'email_link'}
 @app.get('/auth/delivery-status')
 async def delivery_status(request:Request):return {'available':mail_ready(request),'mode':'resend' if mail_ready(request) else 'unconfigured'}
 @app.post('/auth/logout')

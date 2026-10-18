@@ -1,6 +1,6 @@
 [project]
 name = "wazeros-cloudflare-m1"
-version = "29.0.0"
+version = "30.0.0"
 requires-python = ">=3.13"
 dependencies = ["fastapi"]
 [dependency-groups]

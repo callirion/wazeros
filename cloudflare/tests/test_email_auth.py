@@ -209,7 +209,7 @@ def test_workspace_reports_isolation_and_restart(setup):
 
 def test_health_and_status(setup):
     c=setup[3]();assert c.get('/health').json()['auth']=='email_link'
-    assert c.get('/auth/email/status').json()['version']=='29.0.0'
+    assert c.get('/auth/email/status').json()['version']=='30.0.0'
 
 def test_invalid_public_origin(setup):
     setup[1].AUTH_PUBLIC_ORIGIN='http://insecure.example'

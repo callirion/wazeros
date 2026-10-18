@@ -56,29 +56,78 @@ async def quota(store, key, limit, seconds):
     if row["count"] > limit:
         raise HTTPException(429, "Too many requests. Try again later.")
 
+# Only fixed, non-sensitive categories reach logs. Never log provider bodies,
+# recipient addresses, Authorization headers, or sign-in tokens.
+PROVIDER_CODES = frozenset({
+    "validation_error", "missing_api_key", "restricted_api_key",
+    "suspended_api_key", "invalid_permission", "invalid_idempotency_key",
+    "daily_quota_exceeded", "monthly_quota_exceeded", "rate_limit_exceeded",
+    "missing_required_field", "invalid_parameter", "application_error",
+    "service_unavailable", "concurrent_idempotent_requests",
+    "invalid_idempotent_request",
+})
+
+class EmailProviderError(RuntimeError):
+    pass
+
+def provider_diagnostic(status, text):
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    name = data.get("name")
+    code = name if isinstance(name, str) and name in PROVIDER_CODES else "unknown"
+    message = data.get("message", "")
+    message = message.lower() if isinstance(message, str) else ""
+    if "api key" in message and any(x in message for x in ("invalid", "missing", "not active", "suspended")):
+        reason = "api_key_invalid_or_inactive"
+    elif "only send testing emails" in message:
+        reason = "testing_recipient_restricted"
+    elif "domain" in message and "not verified" in message:
+        reason = "sender_domain_unverified"
+    elif status == 403 and "1010" in text:
+        reason = "provider_access_blocked"
+    elif status == 401:
+        reason = "authentication_rejected"
+    elif status == 429:
+        reason = "provider_rate_or_quota_limit"
+    elif status >= 500:
+        reason = "provider_unavailable"
+    else:
+        reason = "provider_request_rejected"
+    return code, reason
+
 async def provider_send(payload, headers):
     # Native Worker fetch avoids unsupported socket transports in WebAssembly.
     from workers import fetch
-    result = await asyncio.wait_for(
-        fetch("https://api.resend.com/emails", method="POST", headers=headers,
-              body=json.dumps(payload)), timeout=15,
-    )
-    status = result.status
-    await result.text()
-        if not 200 <= status < 300:
-        logging.getLogger("wazeros.auth").error(
-            "email_provider_rejected status=%s", status
+    # Explicit User-Agent is required for direct Resend API requests.
+    headers = {**headers, "User-Agent": "Wazeros/30.0.0"}
+    async def perform():
+        result = await fetch(
+            "https://api.resend.com/emails", method="POST", headers=headers,
+            body=json.dumps(payload),
         )
-        raise RuntimeError("Email provider rejected request")
+        return int(result.status), await result.text()
+    # Include reading the response in the timeout, not just receiving headers.
+    status, text = await asyncio.wait_for(perform(), timeout=15)
+    if not 200 <= status < 300:
+        code, reason = provider_diagnostic(status, text)
+        logging.getLogger("wazeros.auth").error(
+            "email_provider_rejected release=30.0.0 status=%s code=%s reason=%s",
+            status, code, reason,
+        )
+        raise EmailProviderError("Email provider rejected request")
 
 async def send_link(request, email, token):
     c = core()
     link = public_origin(request) + "/auth/email#token=" + token
     await provider_send(
-        {"from": c.setting(request, "MAIL_FROM"), "to": [email],
+        {"from": c.setting(request, "MAIL_FROM").strip(), "to": [email],
          "subject": "Your Wazeros sign-in link",
          "text": "Open this link in the browser where you requested it, then press Confirm sign-in. It expires in 10 minutes and works once.\n\n" + link + "\n\nIf you did not request this, ignore this email."},
-        {"Authorization": "Bearer " + c.setting(request, "MAIL_API_KEY"),
+        {"Authorization": "Bearer " + c.setting(request, "MAIL_API_KEY").strip(),
          "Content-Type": "application/json",
          "Idempotency-Key": "email-login/" + c.digest(token)},
     )
@@ -164,7 +213,7 @@ async def confirm_link(body: EmailLoginConfirm, request: Request, response: Resp
 @router.get("/auth/email/status")
 async def email_status(request: Request):
     c = core(); public_origin(request)
-    return {"auth":"email_link", "version":"29.0.0", "email_configured":c.mail_ready(request), "registration_enabled":c.setting(request,"REGISTRATION_ENABLED")=="true", "legal_version":c.setting(request,"LEGAL_VERSION"), "remote_acceptance":"not_established"}
+    return {"auth":"email_link", "version":"30.0.0", "email_configured":c.mail_ready(request), "registration_enabled":c.setting(request,"REGISTRATION_ENABLED")=="true", "legal_version":c.setting(request,"LEGAL_VERSION"), "remote_acceptance":"not_established"}
 
 @router.post("/auth/login")
 @router.post("/auth/signup")

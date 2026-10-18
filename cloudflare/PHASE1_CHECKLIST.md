@@ -1,62 +1,35 @@
-# Phase 1 checklist: v25
+# Phase 1 acceptance checklist - v30
 
-Status: PARTIALLY VERIFIED. Do not start Phase 2 as if this gate has passed.
+Status: OPEN. This is the original v25 gate updated for the email-link architecture
+and the user's reported staging results. It is not a new claim of completion.
+The original checklist is preserved in PHASE1_CHECKLIST_V25_HISTORICAL.md.
 
-## Passed
-- [x] Re-run 31 CPython contract tests: all pass.
-- [x] Install and pin Wrangler 4.149.0; include npm lockfile.
-- [x] Correct compatibility date to 2026-10-13, supported by installed workerd.
-- [x] Apply complete schema using Wrangler local D1.
-- [x] Verify stored snapshots across separate Wrangler processes.
-- [x] Verify org-scoped queries and membership lookup isolation in local D1.
-- [x] Verify foreign keys and 50-snapshot database cap.
-- [x] Verify sequential token reuse rejection in local D1.
-- [x] Verify actual local D1 binding batch rollback after a foreign-key failure.
-- [x] Verify concurrent token consumption: exactly one batch commits.
-- [x] Preserve original frontend, legacy backend, billing code, and assets.
+## Evidence already available
+- [x] Full Python Worker serves the staging sign-in page (user screenshot).
+- [x] Remote database supported account creation and sign-in (user result).
+- [x] Real email delivery and sign-in worked before API-key rotation (user result).
+- [x] Registration disabled again (user confirmation).
+- [x] Post-sign-out session check returned 401 (user screenshot; sequence reported).
+- [x] 50 local CPython/SQLite tests pass in this review; provider calls mocked.
+- [x] Email transport now sends explicit User-Agent and strips outer credential whitespace.
+- [x] Safe provider status/category diagnostics added; raw bodies and secrets not logged.
+- [x] Original frontend, legacy backend, logo/image/font bytes preserved.
 
-## Blocked / still open
-- [ ] Resolve and lock Python runtime dependencies (npm lock is not a Python lock).
-- [ ] Start full Python ASGI app in workerd/Pyodide.
-- [ ] Verify Python-to-JavaScript binding conversion with real requests.
-- [ ] Verify PBKDF2 availability, latency and CPU budget in Pyodide.
-- [ ] Run login/import/report/relogin smoke through actual Python Worker.
-- [ ] Repeat full API isolation tests against actual runtime.
-- [ ] Prove snapshot retrieval after full Python Worker restart.
-- [ ] Provision isolated remote staging D1 and deploy with authorized account access.
-- [ ] Repeat acceptance flow against remote staging.
+## Still open before closing Phase 1
+- [ ] Deploy v30 and verify /health AND /auth/email/status show 30.0.0.
+- [ ] Confirm real delivery using the rotated key, then sign in/check session/sign out.
+- [ ] Confirm live configuration matches the current Worker and DB; never upload the template.
+- [ ] Resolve/lock Python runtime dependencies in the actual deployment environment.
+- [ ] Measure actual Worker CPU usage for auth and CSV/report paths; free-tier fit unproven.
+- [ ] Test expiry, reuse and wrong-browser rejection against deployed Worker/D1.
+- [ ] Run workspace creation, CSV preview/import, report retrieval and relogin on staging.
+- [ ] Verify cross-workspace isolation and role checks against actual Worker runtime.
+- [ ] Retrieve a saved snapshot after redeploy/restart of the full Python Worker.
+- [ ] Verify remote D1 atomic token consumption/rollback/concurrent confirmation behavior.
+- [ ] Confirm staging database isolation and a recoverable backup before migration work.
 
-## Exact blockers observed
-
-Python standalone downloads returned HTTP 404. Direct Wrangler startup initially
-failed because v24 requested compatibility date 2026-10-17 while the installed
-workerd supported dates only through 2026-10-13. The configuration is corrected.
-Startup then failed resolving pyodide-capnp-bin.edgeworker.net, before the app
-could serve requests. This is not evidence that app imports or hashing work.
-
-No Cloudflare account action, remote deployment, data migration or email delivery
-was performed. Do not send credentials in chat. Use authenticated staging tooling
-in an environment able to fetch the Python runtime.
-
-## Reproducible local D1 checks
-
-From cloudflare/, after npm ci:
-
-```sh
-python tools/check_d1_local.py --wrangler ./node_modules/.bin/wrangler
-npm run test:d1:binding
-```
-
-The Python script uses fresh temporary Wrangler persistence. The JavaScript test
-uses local Miniflare D1 bindings for batch/concurrency only, not a rewritten API.
-Both use synthetic test fixtures and never connect to remote databases.
-
-The binding test does not prove Python FFI. Cross-process persistence is verified
-by the Wrangler script, not by the binding-test harness. Full Python restart
-acceptance remains open.
-
-## Next action
-
-Unblock Python runtime downloads in a suitable development environment, resolve
-and lock Python packages, then run the existing runtime_smoke.py against the full
-Worker. Only after local API acceptance should remote staging be provisioned.
+PBKDF2 testing from v25 is obsolete: the active Cloudflare API uses email links.
+Historical local D1 results are not rerun or recertified by this release.
+Product access remains entitlement-gated. Do not bypass billing gates for users;
+use only authorized isolated staging fixtures for report acceptance tests.
+Phase 2 migration and production readiness are not completed by this patch.
