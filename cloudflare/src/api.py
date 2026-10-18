@@ -1,16 +1,14 @@
 import traceback
 import csv,hashlib,io,json,logging,secrets,time,uuid
 from datetime import date,datetime,timezone
-import httpx
 from fastapi import FastAPI,HTTPException,Request,Response
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel,Field
 from .store import Store
-from .passwords import encode_async,verify_async
 from .schemas import Signup,Credentials,WorkspaceInput,TokenRequest,EmailRequest,ResetRequest
 from .reporting import parse_csv,summarize,safe_cell,FIELDS
-app=FastAPI(title='Wazeros Cloudflare M1',version='25.0.0')
+app=FastAPI(title='Wazeros Cloudflare M1',version='29.0.0')
 def now():return int(time.time())
 def stamp():return datetime.now(timezone.utc).isoformat()
 def uid():return str(uuid.uuid4())
@@ -72,98 +70,19 @@ async def access(r,org,write=False,product=False):
     if product and not await s.first('SELECT org_id FROM entitlements WHERE org_id=? AND expires_at>?',org,now()):raise HTTPException(402,'Active product access required')
     return u,o
 def mail_ready(r):return bool(setting(r,'MAIL_API_KEY') and setting(r,'MAIL_FROM'))
-async def deliver(r,email,token):
-    if not mail_ready(r):raise HTTPException(503,'Email delivery is not configured')
-    link=setting(r,'FRONTEND_URL').rstrip('/')+'/auth/verify?token='+token
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            result=await c.post('https://api.resend.com/emails',headers={'Authorization':'Bearer '+setting(r,'MAIL_API_KEY')},json={'from':setting(r,'MAIL_FROM'),'to':[email],'subject':'Verify your email','text':'Verify your email: '+link})
-            result.raise_for_status()
-    except httpx.HTTPError:raise HTTPException(503,'Email provider unavailable')
 @app.get('/health')
 async def health(request:Request):
-    await db(request).first('SELECT 1 AS ok');return {'status':'ok','phase':'M1','storage':'D1','version':'25.0.0'}
+    await db(request).first('SELECT 1 AS ok');return {'status':'ok','phase':'M1','storage':'D1','version':'29.0.0','auth':'email_link'}
 @app.get('/auth/delivery-status')
 async def delivery_status(request:Request):return {'available':mail_ready(request),'mode':'resend' if mail_ready(request) else 'unconfigured'}
-@app.post('/auth/signup',status_code=201)
-async def signup(body:Signup,request:Request,response:Response):
-    r=request;s=db(r)
-    if setting(r,'REGISTRATION_ENABLED')!='true':raise HTTPException(503,'Registration is disabled until staging setup is complete')
-    await throttle(s,'signup:'+body.email)
-    await throttle(s,'signup-ip:'+r.headers.get('cf-connecting-ip',r.client.host if r.client else 'unknown'))
-    if not body.accept_terms or body.document_version!=setting(r,'LEGAL_VERSION'):raise HTTPException(400,'Accept the current legal documents')
-    if not mail_ready(r):raise HTTPException(503,'Email delivery is not configured')
-    if await s.first('SELECT id FROM users WHERE email=?',body.email):raise HTTPException(409,'Email already registered')
-    u={'id':uid(),'email':body.email,'verified':0,'locale':'en'};token=secrets.token_urlsafe(32);session=secrets.token_urlsafe(32)
-    try:
-        await s.batch([('INSERT INTO users(id,email,password_hash) VALUES (?,?,?)',(u['id'],body.email,await encode_async(body.password))),('INSERT INTO legal_acceptances VALUES (?,?,?)',(u['id'],body.document_version,stamp())),('INSERT INTO action_tokens VALUES (?,?,?,?)',(digest(token),u['id'],'verify',now()+3600)),('INSERT INTO sessions VALUES (?,?,?)',(digest(session),u['id'],now()+604800)),audit(u['id'],'account.created')])
-    except Exception as e:
-        if 'UNIQUE' in str(e).upper():raise HTTPException(409,'Email already registered')
-        raise
-    await deliver(r,body.email,token)
-    cookie(r,response,session);return user_data(u)
-@app.post('/auth/login')
-async def login(body:Credentials,request:Request,response:Response):
-    r=request;s=db(r);await throttle(s,'login:'+body.email)
-    await throttle(s,'login-ip:'+r.headers.get('cf-connecting-ip',r.client.host if r.client else 'unknown'))
-    u=await s.first('SELECT * FROM users WHERE email=?',body.email)
-    encoded=u['password_hash'] if u else 'pbkdf2_sha256$600000$'+'00'*16+'$'+'00'*32
-    if not await verify_async(encoded,body.password) or not u:raise HTTPException(401,'Invalid email or password')
-    token=secrets.token_urlsafe(32)
-    await s.batch([('INSERT INTO sessions VALUES (?,?,?)',(digest(token),u['id'],now()+604800)),audit(u['id'],'session.created')])
-    cookie(r,response,token);return user_data(u)
 @app.post('/auth/logout')
 async def logout(request:Request,response:Response):
-    await db(request).batch([('DELETE FROM sessions WHERE token_hash=?',(digest(request.cookies.get('wazeros_session','')),))]);response.delete_cookie('wazeros_session',path='/');return {'ok':True}
+    await db(request).batch([('DELETE FROM sessions WHERE token_hash=?',(digest(request.cookies.get('wazeros_session','')),))])
+    response.delete_cookie('wazeros_session',path='/')
+    return {'ok':True}
 @app.get('/auth/me')
 async def me(request:Request):return user_data(await actor(request))
-@app.post('/auth/resend-verification')
-async def resend(request:Request):
-    u=await actor(request);s=db(request);await throttle(s,'verify:'+u['id'])
-    if not u['verified']:
-        if not mail_ready(request):raise HTTPException(503,'Email delivery is not configured')
-        token=secrets.token_urlsafe(32)
-        await s.batch([('INSERT INTO action_tokens VALUES (?,?,?,?) ON CONFLICT(user_id,purpose) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at',(digest(token),u['id'],'verify',now()+3600))])
-        await deliver(request,u['email'],token)
-    return {'ok':True}
-async def consume(request,token,purpose,password=None):
-    store=db(request);hashed=digest(token)
-    row=await store.first('SELECT user_id FROM action_tokens WHERE token_hash=? AND purpose=? AND expires_at>?',hashed,purpose,now())
-    if not row:raise HTTPException(400,'Invalid or expired link')
-    items=[('INSERT INTO token_uses(token_hash,used_at) VALUES ((SELECT token_hash FROM action_tokens WHERE token_hash=? AND purpose=? AND expires_at>?),?)',(hashed,purpose,now(),now()))]
-    if password is None:items.append(('UPDATE users SET verified=1 WHERE id=?',(row['user_id'],)))
-    else:
-        items.extend([('UPDATE users SET password_hash=? WHERE id=?',(await encode_async(password),row['user_id'])),('DELETE FROM sessions WHERE user_id=?',(row['user_id'],))])
-    items.extend([('DELETE FROM action_tokens WHERE token_hash=?',(hashed,)),audit(row['user_id'],'email.verified' if password is None else 'password.reset')])
-    try:await store.batch(items)
-    except Exception as e:
-        if any(x in str(e).upper() for x in ['UNIQUE','NOT NULL']):raise HTTPException(400,'Invalid or expired link')
-        raise
-    return {'ok':True}
-@app.post('/auth/verify')
-async def verify_email(body:TokenRequest,request:Request):return await consume(request,body.token,'verify')
-@app.post('/auth/forgot-password')
-async def forgot(body:EmailRequest,request:Request):
-    try:email=Credentials.email_format(body.email)
-    except ValueError:raise HTTPException(422,'Enter a valid email')
-    store=db(request);await throttle(store,'reset:'+email)
-    await throttle(store,'reset-ip:'+request.headers.get('cf-connecting-ip',request.client.host if request.client else 'unknown'))
-    if not mail_ready(request):raise HTTPException(503,'Email delivery is not configured')
-    user=await store.first('SELECT * FROM users WHERE email=?',email)
-    if user:
-        token=secrets.token_urlsafe(32)
-        await store.batch([('INSERT INTO action_tokens VALUES (?,?,?,?) ON CONFLICT(user_id,purpose) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at',(digest(token),user['id'],'reset',now()+3600))])
-        await deliver_reset(request,email,token)
-    return {'email_delivery':'resend','message':'If the account exists, a reset message was submitted.'}
-async def deliver_reset(r,email,token):
-    link=setting(r,'FRONTEND_URL').rstrip('/')+'/auth/reset?token='+token
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            result=await client.post('https://api.resend.com/emails',headers={'Authorization':'Bearer '+setting(r,'MAIL_API_KEY')},json={'from':setting(r,'MAIL_FROM'),'to':[email],'subject':'Reset your password','text':'Reset your password: '+link})
-            result.raise_for_status()
-    except httpx.HTTPError:raise HTTPException(503,'Email provider unavailable')
-@app.post('/auth/reset-password')
-async def reset(body:ResetRequest,request:Request):return await consume(request,body.token,'reset',body.password)
+
 @app.get('/organizations')
 async def organizations(request:Request):
     u=await actor(request);return await db(request).all('SELECT o.*,m.role FROM organizations o JOIN memberships m ON m.org_id=o.id WHERE m.user_id=?',u['id'])
@@ -229,3 +148,6 @@ async def delete_report(org:str,sid:str,request:Request):
     u,_=await access(request,org,True,True);s=db(request)
     if not await s.first('SELECT id FROM snapshots WHERE id=? AND org_id=?',sid,org):raise HTTPException(404,'Snapshot not found')
     await s.batch([('DELETE FROM snapshots WHERE id=? AND org_id=?',(sid,org)),audit(u['id'],'report.deleted',org)]);return {'ok':True}
+
+from .email_auth import router as email_auth_router
+app.include_router(email_auth_router)
